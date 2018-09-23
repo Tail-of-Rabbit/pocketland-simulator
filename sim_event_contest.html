@@ -1,0 +1,323 @@
+<!doctype html>
+<html>
+
+<head>
+ <title>Line Chart</title>
+ <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.7.2/Chart.bundle.js"></script>
+ <style>
+ canvas{
+  -moz-user-select: none;
+  -webkit-user-select: none;
+  -ms-user-select: none;
+ }
+ </style>
+</head>
+
+<body>
+ <fieldset>
+  <legend>設定</legend>
+  <label>所持メガネ[個]<input id="in_glasses" type="text" value="0"></label>
+  <label>所持パフューム[個]<input id="in_perfume" type="text" value="0"></label>
+  <label>使用パフューム[個](0～50)<input id="in_perfume_used" type="text" value="0"></label>
+  <br>
+  <label>正解確率[%](0～100)<input id="in_probability" type="text" value="85"></label>
+  <label>ジャッジ回数[回](1～)<input id="in_sequence" type="text" value="1"></label>
+  <label>シミュレーション回数[回](1～)<input id="in_loop" type="text" value="1"></label>
+  <br>
+  <label><input id="chk_keep_pt" type="checkbox">クリア時にptと残りメガネを維持する</label>
+  <br>
+  <label><input id="in_glasses_to_use" type="text" value="30">コンボ続いた後にメガネを使用する(0～30)</label>
+  <label><input id="chk_keep_glasses" type="checkbox">メガネを30コンボ続く場合のみ使用する</label>
+  <br>
+  <label><input id="chk_perfume_to_use" type="checkbox">パフュームを取得した場合すぐに使用する</label>
+ </fieldset>
+ <fieldset>
+  <legend>操作</legend>
+  <button id="chartReset">クリア</button>
+  <button id="simulate">ジャッジ</button>
+  <button id="simulate_OK">ジャッジ成功</button>
+  <button id="simulate_NG">ジャッジ失敗</button>
+  <br>
+  <button id="statisticReset">統計クリア</button>
+ </fieldset>
+ <fieldset disabled>
+  <legend>統計</legend>
+  <label>残りメガネ[個]<input id="out_glasses" type="text" value="0"></label>
+  <label>残りパフューム[個]<input id="out_perfume" type="text" value="0"></label>
+  <label>使用パフューム[個]<input id="out_perfume_used" type="text" value="0"></label>
+  <label>最終pt平均<input id="out_expected_value" type="text" value="0"></label>
+ </fieldset>
+ <br>
+ <div>
+  <canvas id="canvas"></canvas>
+ </div>
+ <br>
+ <script>
+  window.chartColors = {
+   red: 'rgb(255, 99, 132)',
+   blue: 'rgb(54, 162, 235)',
+  };
+  var judgement_counter = 0;
+  var judgement_pt = 0;
+  var combo_counter = 0;
+  var combo_factor = [ 0,
+        1  ,  1.1 ,  1.2 ,  1.5,  2,  2.5,  3  ,  6, 11, 11.05,
+       11.1, 11.15, 11.29, 11.5, 12, 12.5, 13  , 16, 21, 21.05,
+       21.1, 21.15, 21.2 , 21.5, 22, 22.5, 22.7, 23, 26, 30];
+  var config = {
+   type: 'line',
+   data: {
+    labels: [judgement_counter],
+    datasets: [{
+     label: 'ジャッジpt',
+     backgroundColor: window.chartColors.red,
+     borderColor: window.chartColors.red,
+     data: [0],
+     fill: false,
+     yAxisID: 'y-axis-1'
+    }, {
+     label: 'コンボ回数',
+     fill: false,
+     backgroundColor: window.chartColors.blue,
+     borderColor: window.chartColors.blue,
+     data: [0],
+     yAxisID: 'y-axis-2'
+    }]
+   },
+   options: {
+    responsive: true,
+    title: {
+     display: true,
+     text: 'シミュレーション結果'
+    },
+    tooltips: {
+     mode: 'index',
+     intersect: false,
+    },
+    hover: {
+     mode: 'nearest',
+     intersect: true
+    },
+    scales: {
+     xAxes: [{
+      display: true,
+      scaleLabel: {
+       display: true,
+       labelString: '回数'
+      }
+     }],
+     yAxes: [{
+      display: true,
+      scaleLabel: {
+       display: true,
+       labelString: 'pt'
+      },
+      ticks: {
+       min: 0
+      },
+      position: 'left',
+      id: 'y-axis-1'
+     }, {
+      display: true,
+      scaleLabel: {
+       display: true,
+       labelString: 'コンボ'
+      },
+      ticks: {
+       min: 0,
+       max: 30
+      },
+      position: 'right',
+      gridLines: {
+       drawOnChartArea: false // TODO: グリッドの色を変えられる場合は変える
+      },
+      id: 'y-axis-2'
+     }]
+    }
+   }
+  };
+
+  window.onload = function() {
+   var ctx = document.getElementById('canvas').getContext('2d');
+   window.myLine = new Chart(ctx, config);
+   document.getElementById('out_expected_value').value = 0;
+  };
+
+  // シミュレーター実装
+  var glasses = 0;
+  var glasses_to_use = 0;
+  var perfume = 0;
+  var perfume_used = 0;
+  var probability = 0.85;
+  var sequence = 1;
+  var loop_counter = 1;
+  var tmp_glasses = 0;
+  var tmp_perfume = 0;
+  var tmp_perfume_used = 0;
+  function verify_input() {
+   var obj_glasses = document.getElementById('in_glasses');
+   var obj_glasses_value = parseInt(obj_glasses.value, 10);
+   glasses = 0;
+   if (obj_glasses_value >= 0)
+    glasses = obj_glasses_value;
+   else
+    obj_glasses.value = glasses;
+
+   var obj_perfume = document.getElementById('in_perfume');
+   var obj_perfume_value = parseInt(obj_perfume.value, 10);
+   perfume = 0;
+   if (obj_perfume_value >= 0)
+    perfume = obj_perfume_value;
+   else
+    obj_perfume.value = perfume;
+
+   var obj_perfume_used = document.getElementById('in_perfume_used');
+   var obj_perfume_used_value = parseInt(obj_perfume_used.value, 10);
+   perfume_used = 0;
+   if (obj_perfume_used_value >= 0 && obj_perfume_used_value <= 50)
+    perfume_used = obj_perfume_used_value;
+   else
+    obj_perfume_used.value = perfume_used;
+
+   var obj_probability = document.getElementById('in_probability');
+   var obj_probability_value = parseInt(obj_probability.value, 10);
+   if (!(obj_probability_value >= 0 && obj_probability_value <= 100)) {
+    obj_probability_value = 85;
+    obj_probability.value = obj_probability_value;
+   }
+   probability = obj_probability_value / 100;
+
+   var obj_sequence = document.getElementById('in_sequence');
+   var obj_sequence_value = parseInt(obj_sequence.value, 10);
+   sequence = 1;
+   if (obj_sequence_value > 0)
+    sequence = obj_sequence_value;
+   else
+    obj_sequence.value = sequence;
+
+   var obj_loop = document.getElementById('in_loop');
+   var obj_loop_value = parseInt(obj_loop.value, 10);
+   loop_counter = 1;
+   if (obj_loop_value > 0)
+    loop_counter = obj_loop_value;
+   else
+    obj_loop.value = loop_counter;
+
+   var obj_glasses_to_use = document.getElementById('in_glasses_to_use');
+   var obj_glasses_to_use_value = parseInt(obj_glasses_to_use.value, 10);
+   glasses_to_use = 30;
+   if (obj_glasses_to_use_value >= 0 && obj_glasses_to_use_value <= 30)
+    glasses_to_use = obj_glasses_to_use_value;
+   else
+    obj_glasses_to_use.value = glasses_to_use;
+  }
+  function use_glasses() {
+   var cc = (combo_counter == 30) ? 0 : combo_counter;
+   if (cc < glasses_to_use)
+    return false;
+   if (document.getElementById('chk_keep_glasses').checked)
+    if (30 - cc > tmp_glasses)
+     return false;
+   return (tmp_glasses > 0);
+  }
+  function simulate_judgement(force) {
+   verify_input();
+   if (!judgement_counter) {
+    tmp_glasses = glasses;
+    tmp_perfume = perfume;
+    tmp_perfume_used = perfume_used;
+   }
+
+   var continuous_mode = loop_counter > 1;
+   while (loop_counter--) {
+    for (let i = 0; i < sequence; ++i) {
+     config.data.labels.push(++judgement_counter);
+
+     if (document.getElementById('chk_perfume_to_use').checked) {
+      while (tmp_perfume) {
+       if (tmp_perfume_used < 50) {
+        tmp_perfume--;
+        tmp_perfume_used++;
+       } else
+        break;
+      }
+     }
+     if (typeof force === 'undefined') {
+      if (use_glasses()) {
+       combo_counter++;
+       tmp_glasses--;
+      } else if (Math.random() < probability)
+       combo_counter++;
+      else
+       combo_counter = 0;
+     } else {
+      if (force)
+       combo_counter++;
+      else
+       combo_counter = 0;
+     }
+     if (combo_counter == 10)
+      tmp_glasses++;
+     else if (combo_counter == 20)
+      tmp_perfume++;
+     else if (combo_counter == 30)
+      tmp_perfume += 2;
+     else if (combo_counter > 30)
+      combo_counter = 1;
+     judgement_pt += 300 * (1 + tmp_perfume_used) * combo_factor[combo_counter];
+     config.data.datasets[0].data.push(judgement_pt);
+     config.data.datasets[1].data.push(combo_counter);
+    }
+    if (continuous_mode) {
+     expected_value.push(judgement_pt);
+     reset_simulation();
+     tmp_glasses = glasses;
+     tmp_perfume = perfume;
+     tmp_perfume_used = perfume_used;
+    }
+   }
+   if (continuous_mode)
+    update_expected_value();
+
+   document.getElementById('out_glasses').value = tmp_glasses;
+   document.getElementById('out_perfume').value = tmp_perfume;
+   document.getElementById('out_perfume_used').value = tmp_perfume_used;
+   window.myLine.update();
+  }
+  document.getElementById('simulate').addEventListener('click', function() {
+   simulate_judgement();
+  });
+  document.getElementById('simulate_OK').addEventListener('click', function() {
+   simulate_judgement(true);
+  });
+  document.getElementById('simulate_NG').addEventListener('click', function() {
+   simulate_judgement(false);
+  });
+
+  // その他の操作
+  var expected_value = [];
+  function reset_simulation() {
+   judgement_counter = 0;
+   config.data.labels = [judgement_counter]; // remove the label first
+
+   if (!document.getElementById('chk_keep_pt').checked)
+    judgement_pt = 0;
+   combo_counter = 0;
+   config.data.datasets[0].data = [judgement_pt];
+   config.data.datasets[1].data = [combo_counter];
+  }
+  function update_expected_value() {
+   var ev = 0;
+   expected_value.forEach(function(v) {
+    ev += v;
+   });
+   document.getElementById('out_expected_value').value = ev / expected_value.length;
+  }
+  document.getElementById('chartReset').addEventListener('click', function() {
+   reset_simulation();
+   window.myLine.update();
+  });
+ </script>
+</body>
+
+</html>
